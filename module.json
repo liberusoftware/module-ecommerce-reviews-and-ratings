@@ -1,0 +1,22 @@
+{
+    "name": "ecommerce-reviews-and-ratings",
+    "version": "0.1.0",
+    "description": "Owns the record that somebody expressed an opinion about a product, and the merchant's decision about whether that expression is displayed.",
+    "category": "capability",
+    "provider": "Liberu\\Ecommerce\\ReviewsAndRatings\\ReviewsAndRatingsServiceProvider",
+    "features": [
+        "Append-only review and rating expressions that supersede on edit",
+        "Moderation decisions as an actor-attributed audit trail",
+        "Reproducible displayed rating aggregates that name their population",
+        "Tri-state verified purchase over an optional purchase seam",
+        "Idempotent helpfulness votes, one row per voter per expression",
+        "Merchant replies as moderated expressions in their own right",
+        "Automated content screening that queues for a person, never rejects",
+        "Closed-enum moderation, flag and incentive-disclosure reasons",
+        "Syndicated and imported review history that says it is imported",
+        "GDPR export and redaction that leaves published aggregates unmoved"
+    ],
+    "requires": {
+        "packages": {}
+    }
+}
