@@ -1,84 +1,153 @@
-# Ecommerce: Reviews And Ratings Core Module
+# Reviews and Ratings
 
-> This package is the authoritative, provider-neutral implementation of Reviews And Ratings. It owns domain behavior and data; optional API, Filament, Livewire, React, Vue, and Nuxt packages translate its public contracts for their surfaces.
+[![Tests](https://github.com/liberusoftware/module-ecommerce-reviews-and-ratings/actions/workflows/tests.yml/badge.svg)](https://github.com/liberusoftware/module-ecommerce-reviews-and-ratings/actions/workflows/tests.yml)
 
-[Software](https://liberusoftware.com) ·
-[Hosting](https://liberuhosting.com) ·
-[Services](https://liberuservices.com) ·
-[Liberu Group](https://liberugroup.com)
+> Reviews and Ratings owns the record that somebody expressed an opinion about a
+> product, and the merchant's decision about whether that expression is
+> displayed. It owns no product, no order, no shopper identity, and no opinion of
+> its own.
 
-![PHP](https://img.shields.io/badge/PHP-8.5-777BB4?logo=php&logoColor=white) ![Laravel](https://img.shields.io/badge/Laravel-13-FF2D20?logo=laravel&logoColor=white)
-[![Latest release](https://img.shields.io/github/v/release/liberusoftware/module-ecommerce-reviews-and-ratings?sort=semver)](https://github.com/liberusoftware/module-ecommerce-reviews-and-ratings/releases/latest) [![Tests](https://github.com/liberusoftware/module-ecommerce-reviews-and-ratings/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/liberusoftware/module-ecommerce-reviews-and-ratings/actions/workflows/tests.yml)
-
-## Features
-
-- Fully compatible with **Laravel 13**, **PHP 8.5**, and **Pest 5**.
-- Built following the domain-driven design guidelines of the Liberu architecture.
-- Reusable, presenting a clean public contract and boundaries.
-- Adheres to the strict database, security, and authorization standards of Liberu.
-
-## Requirements
-
-- **PHP 8.5**
-- **Composer 2**
-- A supported database (e.g. MySQL, PostgreSQL, SQLite)
-
-## Quick start
-
-To install this package via Composer, run:
+This is a **registry of speech**. It did not author its content, it cannot
+verify most of it, and it must not silently alter it. Nearly every rule in it is
+a rule about custody: who said it, when, whether it is shown, who decided that,
+and what a stranger is allowed to see of it.
 
 ```bash
-composer require liberusoftware/module-ecommerce-reviews-and-ratings
+composer require liberusoftware/ecommerce-reviews-and-ratings
 ```
+
+Installing boots nothing. The package ships no `extra.laravel.providers`; the
+host's module manager registers `ReviewsAndRatingsServiceProvider` only when
+`ecommerce-reviews-and-ratings` is named in `MODULES_ENABLED`.
+
+## Three things called "a review"
+
+Telling them apart is the module.
+
+| | What it is | How it behaves |
+| --- | --- | --- |
+| **An expression** | One person, one product, one moment: a star, a sentence, or both | Immutable and append-only. An edit is a *new* row that supersedes the old one. |
+| **A moderation decision** | The merchant's answer to *should this be shown* | Its own append-only record with an actor, a time, an outcome and a closed-enum reason. Never a flag on the expression. |
+| **An aggregate** | A number derived from the first, filtered by the second | Published as `sum`, `count`, `scale` **and the population it summarises**. Never a rounded float. |
+
+## Recording an opinion
+
+```php
+use Liberu\Ecommerce\ReviewsAndRatings\Actions\RecordExpression;
+use Liberu\Ecommerce\ReviewsAndRatings\Data\ExpressionSubmission;
+use Liberu\Ecommerce\ReviewsAndRatings\Data\FacetSubmission;
+use Liberu\Ecommerce\ReviewsAndRatings\Enums\FacetKind;
+
+$receipt = app(RecordExpression::class)(new ExpressionSubmission(
+    tenantId: $tenantId,
+    productReference: 'catalogue:sku-77193',   // opaque; never dereferenced
+    authorReference: 'shopper:01J8Z…',         // opaque; never dereferenced
+    authorDisplayName: 'Sarah T.',             // chosen for this review, stored, never looked up
+    score: 4,
+    scale: 5,                                  // the scale is part of the record
+    body: 'Arrived early, fits as described.',
+    facets: [new FacetSubmission(FacetKind::Quality, 5, 5)],
+));
+
+$receipt->displayState;   // DisplayState::Pending — nothing is displayed by arriving
+$receipt->verification;   // VerificationState::Unknown unless a purchase seam is bound
+```
+
+## Reading it back
+
+```php
+use Liberu\Ecommerce\ReviewsAndRatings\Queries\DisplayedRatingAggregate;
+use Liberu\Ecommerce\ReviewsAndRatings\Queries\PublicReviewListing;
+
+$reviews   = app(PublicReviewListing::class)($tenantId, 'catalogue:sku-77193');
+$aggregate = app(DisplayedRatingAggregate::class)($tenantId, 'catalogue:sku-77193', scale: 5);
+
+$aggregate->toArray();
+// ['sum' => 374, 'count' => 87, 'scale' => 5, 'population' => 'displayed']
+```
+
+`87` is not `count(reviews)` on the page — it is the population the figure
+summarises. The consumer rounds; this module never does, because a `4.3`
+computed from `4.2999` and a `4.3` computed from `4.3` are different facts and a
+rounded average cannot be re-aggregated without drifting.
+
+`PublicReview` has **no author reference, no tenant, no moderation history and
+no reason** — not hidden, absent. There is no code path that could publish one.
+
+## The two seams
+
+Both are resolved optionally, and they fail in opposite directions. An unbound
+optional seam is safe when its absence removes a **claim**, and unsafe when its
+absence removes a **control**.
+
+### `ConfirmsPurchase` — unbound is a deployment
+
+```php
+$this->app->bind(ConfirmsPurchase::class, OrdersPurchaseVerifier::class);
+```
+
+Leave it unbound and every expression is `VerificationState::Unknown`. That is a
+valid deployment: a merchant with no order history wired up, or one that does
+not want the badge.
+
+Verification is **tri-state, not a boolean**, because the absence of a badge is
+itself a claim shown to a shopper:
+
+| State | Means | A surface should render |
+| --- | --- | --- |
+| `Verified` | A bound verifier said they bought it | The badge |
+| `Unverified` | A bound verifier said they did not | A negative, if you want one |
+| `Unknown` | The module could not ask — unbound, errored, or syndicated content | **Nothing at all** |
+
+`Unknown` must not be flattened into `Unverified` anywhere between the domain
+and the badge.
+
+### `ScreensContent` — unbound is a 503
+
+```php
+$this->app->bind(ScreensContent::class, ProfanityScreener::class);
+```
+
+Leave it unbound and any write carrying a body is refused with
+`ScreeningUnavailable` (503). A star with no words is still accepted, because
+there is nothing to screen. Screening **never rejects**: it routes an expression
+to a person's queue with a priority, or escalates it. A machine does not
+moderate speech here.
+
+## What it will not do
+
+- Join to a catalogue. A product reference is a string it never dereferences.
+- Hold or return a shopper's name, email, address or avatar. It holds the
+  display name the author chose for one expression, and nothing else.
+- Look up whether a review's author is still a customer, still exists, or ever
+  did.
+- Rank products by score, or decide what anybody should be shown.
+- Retract a review because the purchase was returned. It does not learn about
+  returns.
+- Know a jurisdiction, a currency, a weight or a distance. There is no money in
+  this module.
 
 ## Documentation
 
-- [Liberu Main Documentation](https://github.com/liberusoftware/documentation)
-- [Architecture & Standards Index](https://github.com/liberusoftware/documentation/tree/main/architecture)
+- [`docs/domain.md`](docs/domain.md) — the complete public surface an adapter
+  codes against, and the tables behind it.
+- [`docs/adoption.md`](docs/adoption.md) — migrating a host that already has
+  `product_reviews` and `product_rating`.
+- [`docs/runbook.md`](docs/runbook.md) — operating it: seams, queues, erasure,
+  and what each failure means.
 
-## Related Liberu Projects
+## Testing
 
-| Project | Repository | Purpose |
-| --- | --- | --- |
-| **Boilerplate** | [liberusoftware/boilerplate-laravel](https://github.com/liberusoftware/boilerplate-laravel) | Shared Laravel application foundation and reference composition |
-| **CMS** | [liberu-cms/cms-laravel](https://github.com/liberu-cms/cms-laravel) | Structured content, publishing, media, multisite, and headless delivery |
-| **CRM** | [liberu-crm/crm-laravel](https://github.com/liberu-crm/crm-laravel) | Customer data, sales, marketing, service, and customer success |
-| **Billing** | [liberu-billing/billing-laravel](https://github.com/liberu-billing/billing-laravel) | Products, subscriptions, invoicing, payments, and provisioning |
-| **Accounting** | [liberu-accounting/accounting-laravel](https://github.com/liberu-accounting/accounting-laravel) | Ledgers, banking, tax, expenses, close, and financial reporting |
-| **Ecommerce** | [liberu-ecommerce/ecommerce-laravel](https://github.com/liberu-ecommerce/ecommerce-laravel) | Catalog, checkout, orders, fulfillment, returns, B2B, and omnichannel commerce |
-| **Control Panel** | [liberu-control-panel/control-panel-laravel](https://github.com/liberu-control-panel/control-panel-laravel) | Hosting, infrastructure, DNS, mail, databases, backups, and security operations |
-| **Automation** | [liberu-automation/automation-laravel](https://github.com/liberu-automation/automation-laravel) | Governed workflows, provider-neutral AI, approvals, and connectors |
+```bash
+composer update
+vendor/bin/pest
+vendor/bin/phpstan analyse -c vendor/liberusoftware/package-testbench/phpstan.neon -l 1 src
+vendor/bin/pint --test --config vendor/liberusoftware/package-testbench/pint.json
+```
 
-## Security
-
-Please do not report security vulnerabilities through public GitHub issues.
-Follow our [Security Policy](https://github.com/liberusoftware/documentation/blob/main/architecture/SECURITY.md) for private reporting and supported versions.
+The suite runs with no other module installed, over product and author
+references nothing in the database has ever heard of.
 
 ## License
 
-This project is open-source software. You may use, modify, and distribute it
-under the terms described in [LICENSE.md](LICENSE.md).
-
-The linked license text is authoritative; this summary is not legal advice.
-
-## Feedback and contributing
-
-Feedback and contributions are welcome. You can help by reporting reproducible
-bugs, proposing focused enhancements, improving documentation or translations,
-and submitting tested code changes.
-
-Before contributing, please read [CONTRIBUTING.md](https://github.com/liberusoftware/documentation/blob/main/standards/CONTRIBUTING.md) and our
-[Code of Conduct](https://github.com/liberusoftware/documentation/blob/main/architecture/CODE_OF_CONDUCT.md). Search existing issues first, then use
-the appropriate issue template. Pull requests should explain the problem and
-approach, remain focused, include or update tests, pass the required workflows,
-and document user-visible or breaking changes.
-
-## Contributors
-
-Thank you to everyone who helps improve Liberu.
-
-<a href="https://github.com/liberusoftware/module-ecommerce-reviews-and-ratings/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=liberusoftware/module-ecommerce-reviews-and-ratings" alt="Contributors to liberusoftware/module-ecommerce-reviews-and-ratings">
-</a>
-
-[View the full contributors graph](https://github.com/liberusoftware/module-ecommerce-reviews-and-ratings/graphs/contributors).
+MIT. See [LICENSE.md](LICENSE.md).
