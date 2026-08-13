@@ -16,19 +16,22 @@ package keeps its bare name, and the package guards its migration on
 
 Each of these is a reason on its own; together they leave nothing worth keeping.
 
-1. **A public route serialises every reviewer's postal address.**
-   `GET /product/{product}/reviews` is unauthenticated,
-   `ReviewController::show()` does `->with('customer')->get()` and returns
-   `response()->json()`, and `Customer` declares no `$hidden` while carrying
-   `email`, `phone_number`, `address`, `city`, `state`, `postal_code`. Anyone can
-   enumerate product ids and harvest the contact details of every shopper who
-   ever left a review. **Fix this in the host today**, whatever you decide about
-   this module — it is one `->with()` on one line and it does not need a
-   migration.
-2. **One fact in two columns.** `RatingController::store()` writes the same
-   number to `rating` and to `overall_rating`, and two different methods average
-   two different columns. They agree only because one controller happens to write
-   both.
+1. **A public route used to serialise every reviewer's postal address, and the
+   fix is a whitelist somebody has to keep remembering.**
+   `GET /product/{product}/reviews` is unauthenticated (`routes/web.php:177`,
+   outside the `auth` group) and `Customer` still declares no `$hidden` while
+   carrying `email`, `phone_number`, `address`, `city`, `state`, `postal_code`.
+   `ReviewController::show()` has since been repaired by hand — it now selects
+   `customer:id,first_name` and maps to an explicit field list — so the leak is
+   closed today. It is closed by a whitelist inside one controller method, which
+   is exactly the class of fix that reopens the next time somebody adds a field.
+   This module's public projection has no field an identity could go in.
+2. **One fact in two columns, and two averages that answer differently.**
+   `RatingController::store()` writes the same number to `rating` and to
+   `overall_rating`. `Product::getAverageRating()` then averages `rating`, while
+   `RatingController::calculateAverageRating()` averages the four detail columns
+   and composites the non-null ones. Same question, two answers, agreeing only
+   because one controller happens to write both columns.
 3. **A five-star rating computes as 1.25 stars.** `ProductRating::getAverageRating()`
    sums four columns and divides by four; three of them are nullable and `null`
    is `0` in PHP arithmetic. The same computation exists elsewhere done
@@ -37,8 +40,12 @@ Each of these is a reason on its own; together they leave nothing worth keeping.
    ratings got nothing, while the displayed average is over every rating
    regardless of moderation. Post a one-star with abusive text: the text is held,
    the star publishes immediately.
-5. **No unique index behind the duplicate check.** Both controllers do
-   `->exists()` then `create()`. Two concurrent requests both insert.
+5. **No unique index behind the duplicate check.** There is no unique index on
+   `(customer_id, product_id)` on either table. `ReviewController::store()` does
+   `->exists()` then `create()` for the review, and `RatingController::store()`
+   does the same for the rating; only the rating written from
+   `ReviewController` goes through `firstOrCreate`, and `firstOrCreate` without
+   a unique index is still two statements. Two concurrent requests both insert.
 6. **A review and its rating are two rows joined by coincidence** — same customer,
    same product, no key. Delete the review and the star survives, uncounted.
 7. **`is_verified_purchase` is written by nothing.** It is `false` on every row

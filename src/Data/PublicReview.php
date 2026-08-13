@@ -14,9 +14,14 @@ use Liberu\Ecommerce\ReviewsAndRatings\Enums\VerificationState;
  *
  * This is a separate schema from the staff projection rather than a blanked
  * copy of it. It has no author reference, no tenant, no moderation history and
- * no reason — not hidden, absent — so the host's live fault, where one `->with()`
- * serialised every reviewer's postal address on an unauthenticated route, is
- * structurally impossible here rather than merely remembered.
+ * no reason — not hidden, absent.
+ *
+ * The host once served every reviewer's postal address from an unauthenticated
+ * route, because one `->with('customer')` fed straight into `response()->json()`
+ * over a model with no `$hidden`. It has since been fixed by hand, with an
+ * explicit column whitelist — which is a fix that has to be remembered every
+ * time somebody touches that method. This shape cannot regress that way: there
+ * is no field to forget to blank.
  *
  * `$authorDisplayName` is the name the author chose for this one expression,
  * denormalised at write time. It is never resolved from an identity store.

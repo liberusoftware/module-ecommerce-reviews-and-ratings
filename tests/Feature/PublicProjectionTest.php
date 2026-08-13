@@ -21,10 +21,11 @@ beforeEach(function () {
 });
 
 /*
- * The host's worst live fault is one `->with('customer')` on an unauthenticated
- * route serialising every reviewer's postal address. The defence here is not a
- * `$hidden` list somebody has to remember — it is that the public read model has
- * no field that could carry one, so there is no code path to forget.
+ * The host once served every reviewer's postal address from an unauthenticated
+ * route, and fixed it with a hand-written column whitelist inside the
+ * controller. That fix works and has to be re-remembered on every edit. The
+ * defence here is structural instead: the public read model has no field that
+ * could carry an identity, so there is no code path to forget.
  */
 it('has no field on the public read model that could carry an identity', function () {
     $fields = array_map(
